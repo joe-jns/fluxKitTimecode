@@ -32,7 +32,7 @@ local sound = Instance.new("Sound", game.SoundService)
 sound.Name = "AccelSystemsFKTC"
 
 local gitVersion = require(84432237552644)()
-local ver = "V1.4"
+local ver = "V1.5"
 
 local selectedSong = nil
 
