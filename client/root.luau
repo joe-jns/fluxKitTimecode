@@ -132,7 +132,7 @@ local function processShowfile(showfile)
 		end
 
 		-- [FORK] indicateur de progression
-		setStatus(string.format("Lecture %d/%d  -  %.1fs", i, n, os.clock() - startClock))
+		setStatus(string.format("Playing %d/%d  -  %.1fs", i, n, os.clock() - startClock))
 	end
 end
 
@@ -268,20 +268,20 @@ local ok = pcall(function()
 	end)
 end)
 if not ok then
-	warn("[FORK] bouton stopShow non créé (la touche "..STOP_KEY.Name.." reste disponible).")
+	warn("[FORK] stopShow button not created ("..STOP_KEY.Name.." key still works).")
 end
 
 -- [FORK] lancement sécurisé d'un show (anti-double, JSON protégé, progression, blackout)
 function startPlayback(showValue) -- assigne le local déclaré plus haut
 	if isPlaying then
-		setStatus("Déjà en lecture — ["..STOP_KEY.Name.."] pour stopper")
+		setStatus("Already playing — press ["..STOP_KEY.Name.."] to stop")
 		return
 	end
 
 	local ok, decoded = pcall(stringToTable, showValue.Value)
 	if not ok or type(decoded) ~= "table" then
 		errorSound:Play()
-		setStatus("Erreur : show illisible (JSON invalide)")
+		setStatus("Error: unreadable show (invalid JSON)")
 		task.delay(3, resetStatus)
 		return
 	end
@@ -301,7 +301,7 @@ function startPlayback(showValue) -- assigne le local déclaré plus haut
 	end
 	isPlaying = false
 	stopRequested = false
-	setStatus(stopped and "Show stoppé (blackout)" or "Show terminé")
+	setStatus(stopped and "Show stopped (blackout)" or "Show finished")
 	task.delay(3, resetStatus)
 end
 
@@ -406,7 +406,7 @@ gui.core.stopRecording.MouseButton1Up:Connect(function()
 	recording = false
 	local info = game.Workspace.AccelSystemsFKTC.remotes.clientData:InvokeServer("recordingCount")
 	local count = (type(info) == "table" and info.count) or 0
-	setStatus(string.format("Enregistrement arrêté  -  %d events", count))
+	setStatus(string.format("Recording stopped  -  %d events", count))
 	task.delay(3, resetStatus)
 end)
 

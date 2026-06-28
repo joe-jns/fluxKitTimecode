@@ -7,6 +7,6 @@ Version 1.4
 
 ---
 
-> **Fork non officiel** — corrections (1er delay auto à 0, ordre/timing de lecture,
-> JSON protégé) + ajouts (bouton STOP, blackout + arrêt musique, indicateurs REC/lecture).
-> Détails dans [FORK-NOTES.md](FORK-NOTES.md). Projet original : AccelRanger. Licence MIT inchangée.
+> **Unofficial fork** — fixes (first delay auto-zeroed, guaranteed playback order/timing,
+> protected JSON) + additions (STOP button, blackout + music stop, live REC/playback indicators).
+> See [FORK-NOTES.md](FORK-NOTES.md) for details. Original project by AccelRanger. MIT license unchanged.

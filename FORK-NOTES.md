@@ -1,53 +1,52 @@
-# Fork — corrections & améliorations
+# Fork — fixes & improvements
 
-Fork de **fluxKitTimecode** (par AccelRanger — voir README, licence MIT).
-Le projet original n'est **pas** modifié dans son fonctionnement : ce fork
-corrige des bugs et ajoute du confort, sans rien retirer.
+Fork of **fluxKitTimecode** (by AccelRanger — see README, MIT license).
+The original behavior is **not** removed: this fork fixes bugs and adds quality-of-life
+features without taking anything away.
 
-> Seuls **2 scripts** sont modifiés : `server/root.luau` et `client/root.luau`.
-> Pour déployer : remplace le contenu de ces 2 scripts dans le kit installé
-> (le serveur = celui avec `logEvent`, le client = celui avec `processShowfile`).
-
----
-
-## 🐞 Corrections
-
-1. **Premier delay à 0 (automatique)**
-   Avant, le 1er event du showfile héritait du temps écoulé depuis le boot du
-   serveur → il fallait éditer le JSON à la main (Notepad) à chaque export.
-   Désormais `lastEventTime` est remis à zéro au *Start Recording*, et l'export
-   force le 1er `Delay` à `0` (`buildExport`). Plus aucune manip.
-
-2. **Ordre de lecture garanti**
-   `processShowfile` utilisait `pairs` (ordre non garanti sur un tableau) →
-   remplacé par `ipairs`.
-
-3. **Timing sans dérive**
-   La lecture attendait chaque `Delay` en relatif (`task.wait`), ce qui accumule
-   les imprécisions sur un long show. Désormais chaque event est calé sur une
-   **horloge absolue** (temps de départ + somme des delays) → synchro stable.
-
-4. **JSON protégé**
-   Décodage du showfile encapsulé dans un `pcall` → message d'erreur clair au
-   lieu d'un crash si un show est corrompu.
-
-## ✨ Ajouts
-
-5. **Bouton STOP + touche d'arrêt**
-   Impossible avant d'arrêter un show lancé (et 2 clics = 2 shows superposés).
-   Ajout d'un garde anti-double-lecture, d'un **bouton "STOP SHOW"** cloné dans
-   le menu (même style que les boutons existants) et de la touche **Backspace**.
-
-6. **Blackout propre à l'arrêt**
-   À l'arrêt, les effets restés allumés (haze, breath…) sont coupés, et la
-   **musique** (jouée côté serveur) est stoppée via `soundRemote` (`"__STOP__"`).
-
-7. **Indicateurs en direct**
-   - Enregistrement : `● REC — N events — Ts`
-   - Lecture : `Lecture X/N — Ts`
-   (nouvelle requête serveur `clientData("recordingCount")`).
+> Only **2 scripts** are modified: `server/root.luau` and `client/root.luau`.
+> To deploy: replace the contents of these 2 scripts in your installed kit
+> (the server = the one containing `logEvent`, the client = the one containing `processShowfile`).
 
 ---
 
-Tous les changements sont commentés dans le code avec le tag `[FORK]`.
-Crédit du projet original : **AccelRanger**. Licence : **MIT** (inchangée).
+## 🐞 Fixes
+
+1. **First delay auto-zeroed**
+   Previously the first showfile event inherited the time elapsed since the server
+   booted → you had to edit the JSON by hand (Notepad) on every export.
+   Now `lastEventTime` is reset on *Start Recording*, and the export forces the
+   first `Delay` to `0` (`buildExport`). No more manual editing.
+
+2. **Guaranteed playback order**
+   `processShowfile` used `pairs` (no guaranteed order on an array) → replaced with `ipairs`.
+
+3. **Drift-free playback timing**
+   Playback waited each `Delay` relatively (`task.wait`), which accumulates timing
+   errors over a long show. Each event is now scheduled against an **absolute clock**
+   (start time + sum of delays) → stable sync.
+
+4. **Protected JSON decode**
+   Showfile decoding is wrapped in `pcall` → a clear error message instead of a
+   crash if a show is corrupted.
+
+## ✨ Additions
+
+5. **STOP button + stop key**
+   Previously you couldn't stop a running show (and 2 clicks = 2 overlapping shows).
+   Added an anti-double-play guard, a **"STOP SHOW" button** cloned into the menu
+   (matching the existing button style), and the **Backspace** key.
+
+6. **Clean blackout on stop**
+   On stop, effects left on (haze, breath…) are turned off, and the **music**
+   (played server-side) is stopped via `soundRemote` (`"__STOP__"`).
+
+7. **Live indicators**
+   - Recording: `● REC — N events — Ts`
+   - Playback: `Playing X/N — Ts`
+   (new server query `clientData("recordingCount")`).
+
+---
+
+All changes are commented in the code with the `[FORK]` tag.
+Original project credit: **AccelRanger**. License: **MIT** (unchanged).
