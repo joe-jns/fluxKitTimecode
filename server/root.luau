@@ -64,6 +64,17 @@ function init()
 	end
 end
 
+-- [FORK FIX] Renvoie une copie du showfile avec le PREMIER delay forcé à 0.
+-- Évite d'avoir à éditer le JSON dans Notepad à chaque export.
+local function buildExport()
+	local out = {}
+	for i, e in ipairs(showfile) do
+		out[i] = e
+	end
+	if out[1] then out[1].Delay = 0 end
+	return out
+end
+
 local function logEvent(eventType, arg1, arg2, arg3, arg4, arg5)
 	if script.Parent.sessionData.recording.Value == true then
 		local currentTime = os.clock()
@@ -98,12 +109,14 @@ end
 -- events
 
 game.Workspace.AccelSystemsFKTC.remotes.getData.OnServerInvoke = function(player)
-	return showfile
+	return buildExport() -- [FORK FIX] premier delay à 0
 end
 
 game.Workspace.AccelSystemsFKTC.remotes.clientData.OnServerInvoke = function(player, arg)
 	if arg == "showfile" then
-		return showfile
+		return buildExport() -- [FORK FIX] premier delay à 0
+	elseif arg == "recordingCount" then -- [FORK] pour l'indicateur d'enregistrement
+		return { count = #showfile, recording = script.Parent.sessionData.recording.Value }
 	elseif arg == "outputlog" then
 		if game.ReplicatedStorage.AccelSystemsFKTC.debug.Value == true then print(logTable) end
 		return logTable
@@ -115,6 +128,7 @@ game.Workspace.AccelSystemsFKTC.remotes.getDataClient.OnServerEvent:Connect(func
 		if arg == "clear" then
 			table.clear(showfile)
 		elseif arg == "startRecording" then
+			lastEventTime = os.clock() -- [FORK FIX] reset : le 1er delay part de l'instant du Start
 			script.Parent.sessionData.recording.Value = true
 		elseif arg == "stopRecording" then
 			script.Parent.sessionData.recording.Value = false
@@ -124,7 +138,7 @@ end)
 
 game.Workspace.AccelSystemsFKTC.remotes.getDataServer.Event:Connect(function(arg)
 	if arg == "get" then
-		game.Workspace.AccelSystemsFKTC.remotes.tableReturn:Fire(showfile)
+		game.Workspace.AccelSystemsFKTC.remotes.tableReturn:Fire(buildExport()) -- [FORK FIX] premier delay à 0
 	elseif arg == "clear" then
 		table.clear(showfile)
 	elseif arg == "reset" then
@@ -163,6 +177,10 @@ game.Workspace.AccelSystemsFKTC.remotes.selectSong.OnServerEvent:Connect(functio
 end)
 
 game.Workspace.AccelSystemsFKTC.remotes.soundRemote.OnServerEvent:Connect(function(player, NAME, ID)
+	if NAME == "__STOP__" then -- [FORK] arrêt de la musique quand on stoppe un show
+		sound:Stop()
+		return
+	end
 	sound.SoundId = "rbxassetid://"..ID
 	sound:Play()
 end)

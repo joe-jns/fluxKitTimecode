@@ -38,6 +38,26 @@ local remotes = {
 	functions = remoteFolder.call.functions
 }
 
+-- [FORK] état lecture / enregistrement + helpers de statut
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+local STOP_KEY = Enum.KeyCode.Backspace -- touche pour stopper un show en cours
+
+local isPlaying = false
+local stopRequested = false
+local recording = false
+local activeEffects = {} -- effets allumés pendant la lecture (pour le blackout)
+local startPlayback -- [FORK] déclaration anticipée (utilisée dans changeFrame avant sa définition)
+
+local function setStatus(text)
+	script.Parent.main.top.msg.Text = text
+end
+local function resetStatus()
+	if not isPlaying and not recording then
+		script.Parent.main.top.msg.Text = "Flux Kit Timecode System"
+	end
+end
+
 local gui = script.Parent.main
 local templates = script.templates
 local showGUI = gui.core.shows
@@ -61,8 +81,12 @@ errorSound.Name = "FKTC_UI_SOUNDS_E"
 
 --functions
 local function processShowfile(showfile)
-	print("running stack: processShowfile")
-	for _, event in pairs(showfile) do
+	local n = #showfile
+	local startClock = os.clock()
+	local target = 0 -- temps cumulé cible (timing absolu = pas de dérive)
+	table.clear(activeEffects)
+
+	for i, event in ipairs(showfile) do -- [FORK] ipairs = ordre garanti
 		local eventType = event.eventType
 		local arg1 = event.Function
 		local arg2 = event.Arguments
@@ -70,8 +94,14 @@ local function processShowfile(showfile)
 		local arg4 = event.FunctionsExpand
 		local arg5 = event.ColorCompressed
 
-		if game.ReplicatedStorage.AccelSystemsFKTC.debug.Value == true then print("waiting: "..event.Delay) end
-		task.wait(event.Delay)
+		-- [FORK] timing sans dérive : on attend l'INSTANT cible, pas un delay relatif
+		target += event.Delay
+		while not stopRequested do
+			local remaining = target - (os.clock() - startClock)
+			if remaining <= 0 then break end
+			task.wait(math.min(remaining, 0.05)) -- réactif à l'arrêt
+		end
+		if stopRequested then break end -- [FORK] arrêt demandé
 
 		if remotes[eventType] then
 			if eventType == "functions" or eventType == "pyrotechnics" then
@@ -86,13 +116,24 @@ local function processShowfile(showfile)
 					remotes[eventType]:FireServer(arg1, arg2, arg3, arg4, compressedColor)
 				end
 			else
+				-- [FORK] suivi des effets actifs (pour le blackout à l'arrêt)
+				if eventType == "effects" then
+					local key = HttpService:JSONEncode(arg1)
+					if arg2 == "on" then
+						activeEffects[key] = arg1
+					elseif arg2 == "off" then
+						activeEffects[key] = nil
+					end
+				end
 				remotes[eventType]:FireServer(arg1, arg2)
 			end
 		else
-			warn("No remote found for event type: "..eventType)
+			warn("No remote found for event type: "..tostring(eventType))
 		end
+
+		-- [FORK] indicateur de progression
+		setStatus(string.format("Lecture %d/%d  -  %.1fs", i, n, os.clock() - startClock))
 	end
-	--showRunning = true
 end
 
 --[[
@@ -173,21 +214,10 @@ local function changeFrame(frame)
 			if v:IsA("Frame") then
 				if v.Name ~= "spacer" then
 					v.playShow.MouseButton1Up:Connect(function()
+						clickSound:Play()
 						for _,value in pairs(shows:GetChildren()) do
 							if v.Name == value.Name then
-								playSound:Play()
-								coroutine.wrap(function()
-									userWarning("Playback System", "Running showfile / If not started run the show again.")
-								end)()
-
-								logAction("play")
-
-								local showfileProcessed = stringToTable(value.Value)
-								coroutine.wrap(function()
-									userWarning("Playback System", "Decompressing table, this might take a while.")
-								end)()
-								errorSound:Play()
-								processShowfile(showfileProcessed) -- runs the show
+								startPlayback(value) -- [FORK] lecture sécurisée
 							end
 						end
 					end)
@@ -198,6 +228,90 @@ local function changeFrame(frame)
 
 	gui.core.selected.Text = "Selected: "..frame
 end
+
+-- [FORK] extinction propre : coupe les effets restés allumés (haze, breath, etc.)
+local function blackout()
+	for _, fn in pairs(activeEffects) do
+		pcall(function() remotes.effects:FireServer(fn, "off") end)
+	end
+	table.clear(activeEffects)
+end
+
+-- [FORK] arrêt d'un show en cours
+local function stopPlayback()
+	if isPlaying then
+		stopRequested = true
+	end
+end
+
+-- [FORK] bouton STOP intégré au menu : on CLONE "Stop Recording" pour garder le
+-- style exact du panneau, on le place juste en dessous, et on le câble sur l'arrêt.
+local ok = pcall(function()
+	if gui.core:FindFirstChild("stopShow") then return end -- déjà créé
+	local src = gui.core:FindFirstChild("stopRecording")
+	if not src then return end
+
+	local btn = src:Clone()
+	btn.Name = "stopShow"
+	-- met à jour le texte (bouton texte OU label enfant)
+	if btn:IsA("TextButton") then btn.Text = "STOP SHOW" end
+	for _, lbl in ipairs(btn:GetDescendants()) do
+		if lbl:IsA("TextLabel") then lbl.Text = "STOP SHOW" end
+	end
+	-- placé juste sous "Stop Recording" (ignoré si le menu a une mise en page auto)
+	btn.Position = src.Position + UDim2.new(0, 0, src.Size.Y.Scale, src.Size.Y.Offset + 6)
+	btn.Parent = gui.core
+
+	btn.MouseButton1Up:Connect(function()
+		clickSound:Play()
+		stopPlayback()
+	end)
+end)
+if not ok then
+	warn("[FORK] bouton stopShow non créé (la touche "..STOP_KEY.Name.." reste disponible).")
+end
+
+-- [FORK] lancement sécurisé d'un show (anti-double, JSON protégé, progression, blackout)
+function startPlayback(showValue) -- assigne le local déclaré plus haut
+	if isPlaying then
+		setStatus("Déjà en lecture — ["..STOP_KEY.Name.."] pour stopper")
+		return
+	end
+
+	local ok, decoded = pcall(stringToTable, showValue.Value)
+	if not ok or type(decoded) ~= "table" then
+		errorSound:Play()
+		setStatus("Erreur : show illisible (JSON invalide)")
+		task.delay(3, resetStatus)
+		return
+	end
+
+	isPlaying = true
+	stopRequested = false
+	playSound:Play()
+	logAction("play")
+
+	processShowfile(decoded)
+
+	blackout() -- [FORK] coupe les effets bloqués
+	local stopped = stopRequested
+	if stopped then
+		-- [FORK] coupe aussi la musique (jouée côté serveur)
+		pcall(function() game.Workspace.AccelSystemsFKTC.remotes.soundRemote:FireServer("__STOP__") end)
+	end
+	isPlaying = false
+	stopRequested = false
+	setStatus(stopped and "Show stoppé (blackout)" or "Show terminé")
+	task.delay(3, resetStatus)
+end
+
+-- [FORK] touche d'arrêt
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode == STOP_KEY then
+		stopPlayback()
+	end
+end)
 
 --setup
 for _,v in pairs(shows:GetChildren()) do --shows
@@ -228,11 +342,7 @@ for _,v in pairs(showGUI.frame:GetChildren()) do
 				clickSound:Play()
 				for _,value in pairs(shows:GetChildren()) do
 					if v.Name == value.Name then
-						userWarning("Playback System", "Started showfile playback.")
-						logAction("play")
-
-						local showfileProcessed = stringToTable(value.Value)
-						processShowfile(showfileProcessed)
+						startPlayback(value) -- [FORK] lecture sécurisée
 					end
 				end
 			end)
@@ -273,12 +383,31 @@ gui.core.startRecording.MouseButton1Up:Connect(function()
 	clickSound:Play()
 	game.Workspace.AccelSystemsFKTC.remotes.getDataClient:FireServer("startRecording")
 	logAction("startRecording")
+
+	-- [FORK] indicateur d'enregistrement (events + temps)
+	recording = true
+	local recStart = os.clock()
+	task.spawn(function()
+		while recording do
+			local info = game.Workspace.AccelSystemsFKTC.remotes.clientData:InvokeServer("recordingCount")
+			local count = (type(info) == "table" and info.count) or 0
+			setStatus(string.format("\u{25CF} REC  -  %d events  -  %.1fs", count, os.clock() - recStart))
+			task.wait(0.3)
+		end
+	end)
 end)
 
 gui.core.stopRecording.MouseButton1Up:Connect(function()
 	clickSound:Play()
 	game.Workspace.AccelSystemsFKTC.remotes.getDataClient:FireServer("stopRecording")
 	logAction("stopRecording")
+
+	-- [FORK] fin d'enregistrement
+	recording = false
+	local info = game.Workspace.AccelSystemsFKTC.remotes.clientData:InvokeServer("recordingCount")
+	local count = (type(info) == "table" and info.count) or 0
+	setStatus(string.format("Enregistrement arrêté  -  %d events", count))
+	task.delay(3, resetStatus)
 end)
 
 gui.core.clear.MouseButton1Up:Connect(function()
