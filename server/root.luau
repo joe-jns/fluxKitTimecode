@@ -31,6 +31,103 @@ local lastEventTime = os.clock()
 local sound = Instance.new("Sound", game.SoundService)
 sound.Name = "AccelSystemsFKTC"
 
+-- [FORK] Persistance des shows via DataStore : sauvegarde auto + rechargement
+-- auto au démarrage. Plus besoin de copier le JSON à la main.
+-- (Nécessite "Enable Studio Access to API Services" dans Game Settings > Security
+--  pour tester en Studio. Dégrade proprement si indisponible : aucune erreur.)
+local DataStoreService = game:GetService("DataStoreService")
+local SHOW_STORE
+local SHOW_INDEX_KEY = "__index__"
+local DELETED_KEY = "__deleted__" -- noms supprimés (ré-effacés à chaque démarrage, même les "baked")
+pcall(function() SHOW_STORE = DataStoreService:GetDataStore("FKTC_Shows_v1") end)
+
+local function showsFolder()
+	return game.ReplicatedStorage.AccelSystemsFKTC.shows
+end
+
+-- [FORK] garantit un nom unique (évite d'écraser un show existant)
+local function uniqueName(base)
+	local folder = showsFolder()
+	if not folder:FindFirstChild(base) then return base end
+	local i = 2
+	while folder:FindFirstChild(base .. " (" .. i .. ")") do i += 1 end
+	return base .. " (" .. i .. ")"
+end
+
+local function persistSaveShow(name, data)
+	if not SHOW_STORE then return end
+	pcall(function() SHOW_STORE:SetAsync("show_" .. name, data) end)
+	pcall(function()
+		SHOW_STORE:UpdateAsync(SHOW_INDEX_KEY, function(idx)
+			idx = (type(idx) == "table") and idx or {}
+			for _, n in ipairs(idx) do if n == name then return idx end end
+			table.insert(idx, name)
+			return idx
+		end)
+	end)
+	-- si un nom supprimé est réutilisé, on le retire de la liste noire
+	pcall(function()
+		SHOW_STORE:UpdateAsync(DELETED_KEY, function(set)
+			set = (type(set) == "table") and set or {}
+			set[name] = nil
+			return set
+		end)
+	end)
+end
+
+local function persistLoadShows()
+	if not SHOW_STORE then return end
+	local ok, idx = pcall(function() return SHOW_STORE:GetAsync(SHOW_INDEX_KEY) end)
+	if not ok or type(idx) ~= "table" then return end
+	for _, name in ipairs(idx) do
+		if not showsFolder():FindFirstChild(name) then
+			local ok2, data = pcall(function() return SHOW_STORE:GetAsync("show_" .. name) end)
+			if ok2 and type(data) == "string" then
+				local sv = Instance.new("StringValue")
+				sv.Name = name
+				sv.Value = data
+				sv.Parent = showsFolder()
+			end
+		end
+	end
+end
+
+local function persistDeleteShow(name)
+	if not SHOW_STORE then return end
+	pcall(function() SHOW_STORE:RemoveAsync("show_" .. name) end)
+	pcall(function()
+		SHOW_STORE:UpdateAsync(SHOW_INDEX_KEY, function(idx)
+			idx = (type(idx) == "table") and idx or {}
+			for i, n in ipairs(idx) do
+				if n == name then table.remove(idx, i) break end
+			end
+			return idx
+		end)
+	end)
+	-- ajoute à la liste noire -> sera ré-effacé à chaque démarrage (gère les shows "baked")
+	pcall(function()
+		SHOW_STORE:UpdateAsync(DELETED_KEY, function(set)
+			set = (type(set) == "table") and set or {}
+			set[name] = true
+			return set
+		end)
+	end)
+end
+
+-- [FORK] supprime, au démarrage, tout show présent dans le dossier mais marqué supprimé
+-- (utile pour les StringValue "baked" dans le place qu'un script runtime ne peut pas
+--  retirer du fichier, mais qu'on peut masquer à chaque session)
+local function purgeDeleted()
+	if not SHOW_STORE then return end
+	local ok, set = pcall(function() return SHOW_STORE:GetAsync(DELETED_KEY) end)
+	if not ok or type(set) ~= "table" then return end
+	for _, sv in ipairs(showsFolder():GetChildren()) do
+		if sv:IsA("StringValue") and set[sv.Name] then
+			sv:Destroy()
+		end
+	end
+end
+
 local gitVersion = require(84432237552644)()
 local ver = "V1.5"
 
@@ -148,10 +245,43 @@ end)
 
 game.Workspace.AccelSystemsFKTC.remotes.createShow.OnServerEvent:Connect(function(player,name, data)
 	if whitelist(player) == true then
-		local stringValue = Instance.new("StringValue", game.ReplicatedStorage.AccelSystemsFKTC.shows)
+		local finalName = uniqueName(name) -- [FORK] noms uniques = plus d'écrasement
+		local stringValue = Instance.new("StringValue", showsFolder())
 		stringValue.Value = data
-		stringValue.Name = name
+		stringValue.Name = finalName
+		persistSaveShow(finalName, data) -- [FORK] sauvegarde persistante
 	end
+end)
+
+-- [FORK] suppression / renommage de shows depuis l'UI (RemoteEvents créés si absents)
+local remotesFolder = game.Workspace.AccelSystemsFKTC.remotes
+local function ensureRemote(rname)
+	local r = remotesFolder:FindFirstChild(rname)
+	if not r then
+		r = Instance.new("RemoteEvent")
+		r.Name = rname
+		r.Parent = remotesFolder
+	end
+	return r
+end
+
+ensureRemote("deleteShow").OnServerEvent:Connect(function(player, name)
+	if whitelist(player) ~= true then return end
+	local sv = showsFolder():FindFirstChild(name)
+	if sv then sv:Destroy() end
+	persistDeleteShow(name)
+end)
+
+ensureRemote("renameShow").OnServerEvent:Connect(function(player, oldName, newName)
+	if whitelist(player) ~= true then return end
+	if type(newName) ~= "string" or newName == "" or newName == oldName then return end
+	local sv = showsFolder():FindFirstChild(oldName)
+	if not sv then return end
+	local finalName = uniqueName(newName)
+	local data = sv.Value
+	sv.Name = finalName
+	persistDeleteShow(oldName)
+	persistSaveShow(finalName, data)
 end)
 
 game.Workspace.AccelSystemsFKTC.remotes.logAction.OnServerEvent:Connect(function(player,action)
@@ -227,3 +357,7 @@ end)
 -- initiliaze
 
 init()
+task.spawn(function() -- [FORK] recharge les shows sauvegardés, puis purge les supprimés
+	persistLoadShows()
+	purgeDeleted()
+end)

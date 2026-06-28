@@ -49,6 +49,10 @@ local recording = false
 local activeEffects = {} -- effets allumés pendant la lecture (pour le blackout)
 local startPlayback -- [FORK] déclaration anticipée (utilisée dans changeFrame avant sa définition)
 
+-- [FORK] remotes pour supprimer / renommer un show (créés côté serveur)
+local deleteShowRemote = game.Workspace.AccelSystemsFKTC.remotes:WaitForChild("deleteShow", 10)
+local renameShowRemote = game.Workspace.AccelSystemsFKTC.remotes:WaitForChild("renameShow", 10)
+
 local function setStatus(text)
 	script.Parent.main.top.msg.Text = text
 end
@@ -172,6 +176,98 @@ local function userWarning(header,text)
 	script.Parent.main.top.msg.Text = "Flux Kit Timecode System"
 end
 
+-- [FORK] ajoute "Rename" + "Delete" à une ligne de show et réorganise : Nom | Play | Rename | Delete
+local function decorateShowEntry(entry)
+	if entry:GetAttribute("fktcDecorated") then return end
+	local play = entry:FindFirstChild("playShow")
+	local nameLabel = entry:FindFirstChild("showName")
+	if not play or not nameLabel then return end
+	entry:SetAttribute("fktcDecorated", true)
+
+	-- mise en page propre, en proportions (Nom | Play | Rename | Delete)
+	-- + plafond de taille de texte pour éviter les noms géants
+	local function cap(g, maxSize)
+		local c = g:FindFirstChildOfClass("UITextSizeConstraint") or Instance.new("UITextSizeConstraint")
+		c.MaxTextSize = maxSize
+		c.Parent = g
+	end
+
+	nameLabel.Position = UDim2.new(0.03, 0, 0, 0)
+	nameLabel.Size = UDim2.new(0.45, 0, 1, 0)
+	nameLabel.TextScaled = true
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	cap(nameLabel, 34)
+
+	play.Position = UDim2.new(0.50, 0, 0.15, 0)
+	play.Size = UDim2.new(0.14, 0, 0.70, 0)
+	play.TextScaled = true
+	cap(play, 26)
+
+	local function mkBtn(x, w, txt, color)
+		local b = play:Clone() -- clone pour garder le style ; les connexions ne se clonent pas
+		b.Name = "fktc_" .. txt
+		b.Position = UDim2.new(x, 0, 0.15, 0)
+		b.Size = UDim2.new(w, 0, 0.70, 0)
+		b.Text = txt
+		b.TextScaled = true
+		cap(b, 26)
+		if color then b.BackgroundColor3 = color end
+		b.Parent = entry
+		return b
+	end
+
+	local renameBtn = mkBtn(0.655, 0.14, "Rename")
+	local deleteBtn = mkBtn(0.81, 0.16, "Delete", Color3.fromRGB(150, 45, 45))
+
+	local confirming = false
+	deleteBtn.MouseButton1Up:Connect(function()
+		clickSound:Play()
+		if not confirming then
+			-- 1er clic : demande confirmation
+			confirming = true
+			deleteBtn.Text = "Sure?"
+			deleteBtn.BackgroundColor3 = Color3.fromRGB(210, 60, 60)
+			task.delay(2.5, function()
+				if confirming and deleteBtn.Parent then
+					confirming = false
+					deleteBtn.Text = "Delete"
+					deleteBtn.BackgroundColor3 = Color3.fromRGB(150, 45, 45)
+				end
+			end)
+			return
+		end
+		-- 2e clic : confirmé
+		if deleteShowRemote then deleteShowRemote:FireServer(entry.Name) end
+		entry:Destroy()
+	end)
+
+	renameBtn.MouseButton1Up:Connect(function()
+		clickSound:Play()
+		-- petit éditeur : TextBox temporaire par-dessus le nom
+		local box = Instance.new("TextBox")
+		box.Size = nameLabel.Size
+		box.Position = nameLabel.Position
+		box.Text = nameLabel.Text
+		box.ClearTextOnFocus = false
+		box.TextScaled = true
+		box.Font = nameLabel.Font
+		box.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+		box.TextColor3 = Color3.fromRGB(255, 255, 255)
+		box.ZIndex = nameLabel.ZIndex + 5
+		box.Parent = entry
+		box:CaptureFocus()
+		box.FocusLost:Connect(function(enterPressed)
+			local newName = box.Text
+			box:Destroy()
+			if enterPressed and newName ~= "" and newName ~= entry.Name then
+				if renameShowRemote then renameShowRemote:FireServer(entry.Name, newName) end
+				nameLabel.Text = newName
+				entry.Name = newName
+			end
+		end)
+	end)
+end
+
 local function changeFrame(frame)
 	clickSound:Play()
 	for _,v in pairs(gui.core:GetChildren()) do
@@ -213,6 +309,7 @@ local function changeFrame(frame)
 		for _,v in pairs(showGUI.frame:GetChildren()) do
 			if v:IsA("Frame") then
 				if v.Name ~= "spacer" then
+					decorateShowEntry(v) -- [FORK] Rename/Delete + mise en page
 					v.playShow.MouseButton1Up:Connect(function()
 						clickSound:Play()
 						for _,value in pairs(shows:GetChildren()) do
@@ -271,6 +368,23 @@ if not ok then
 	warn("[FORK] stopShow button not created ("..STOP_KEY.Name.." key still works).")
 end
 
+-- [FORK] tidy left column: relative heights so the items always fit (no overflow,
+-- resize-safe). Horizontal kept as the original (offset). Right-side panels untouched.
+do
+	local LEFT = { "compress", "clear", "startRecording", "stopRecording", "stopShow", "outputBT", "songSelected" }
+	local n = #LEFT
+	local mTop, gap = 0.03, 0.02 -- top/bottom margin + gap, as a fraction of column height
+	local h = (1 - 2 * mTop - (n - 1) * gap) / n
+	local X, W = 25, 500 -- same horizontal placement/width as the original
+	for i, name in ipairs(LEFT) do
+		local el = gui.core:FindFirstChild(name)
+		if el then
+			el.Position = UDim2.new(0, X, mTop + (i - 1) * (h + gap), 0)
+			el.Size = UDim2.new(0, W, h, 0)
+		end
+	end
+end
+
 -- [FORK] lancement sécurisé d'un show (anti-double, JSON protégé, progression, blackout)
 function startPlayback(showValue) -- assigne le local déclaré plus haut
 	if isPlaying then
@@ -295,10 +409,8 @@ function startPlayback(showValue) -- assigne le local déclaré plus haut
 
 	blackout() -- [FORK] coupe les effets bloqués
 	local stopped = stopRequested
-	if stopped then
-		-- [FORK] coupe aussi la musique (jouée côté serveur)
-		pcall(function() game.Workspace.AccelSystemsFKTC.remotes.soundRemote:FireServer("__STOP__") end)
-	end
+	-- [FORK] coupe la musique en fin de show (arrêt manuel OU fin naturelle)
+	pcall(function() game.Workspace.AccelSystemsFKTC.remotes.soundRemote:FireServer("__STOP__") end)
 	isPlaying = false
 	stopRequested = false
 	setStatus(stopped and "Show stopped (blackout)" or "Show finished")
@@ -338,6 +450,7 @@ gui.core.songsBT.MouseButton1Up:Connect(function() changeFrame("songs") end)
 for _,v in pairs(showGUI.frame:GetChildren()) do
 	if v:IsA("Frame") then
 		if v.Name ~= "spacer" then
+			decorateShowEntry(v) -- [FORK] Rename/Delete + mise en page
 			v.playShow.MouseButton1Up:Connect(function()
 				clickSound:Play()
 				for _,value in pairs(shows:GetChildren()) do
@@ -374,7 +487,7 @@ gui.core.compress.MouseButton1Up:Connect(function()
 	clickSound:Play()
 	local data = game.Workspace.AccelSystemsFKTC.remotes.clientData:InvokeServer("showfile")
 	local func = tableToString(data)
-	createShow("SHOW"..show.."COMPRESSED", func)
+	createShow("Show " .. os.date("%Y-%m-%d %H-%M-%S"), func) -- [FORK] nom daté = unique & lisible
 	logAction("compress")
 	show += 1
 end)
